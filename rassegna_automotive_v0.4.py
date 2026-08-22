@@ -1,5 +1,5 @@
 """
-Rassegna Automotive Giornaliera - v0.4
+Rassegna Automotive Giornaliera - v0.4 (fonti IT+EU verificate; invio email robusto)
 Pipeline: RSS ingest -> dedup/interleave equo -> sintesi AI fedele (Claude)
           -> aggiorna un Google Doc (per il Progetto Claude) + invia email HTML
 Copertura a 360 gradi su tutto il settore automotive.
@@ -26,33 +26,64 @@ import anthropic
 
 ROME = ZoneInfo("Europe/Rome")
 
-# --- CONFIG ---------------------------------------------------------------
-# Feed diretti generalisti (coprono gia' ampiamente il settore).
-DIRECT_FEEDS = [
-    "https://it.motor1.com/rss/news/all/",      # Motor1 Italia (generalista + EV)
-    "https://www.autoblog.it/feed",             # Autoblog Italia (generalista)
-    "https://formulapassion.it/automoto/feed",  # FormulaPassion (auto + motorsport)
-]
-
-def gnews(query, lang="it", country="IT"):
-    return (f"https://news.google.com/rss/search?q={quote_plus(query)}+when:1d"
+# --- CONFIG: FONTI --------------------------------------------------------
+# Helper: costruisce un feed RSS di Google News da una query (limitata a 24h).
+def gn(query, lang="it", country="IT"):
+    return (f"https://news.google.com/rss/search?q={quote_plus(query + ' when:1d')}"
             f"&hl={lang}&gl={country}&ceid={country}:{lang}")
 
-# Ventaglio a 360 gradi: ogni query copre un'area diversa del settore.
-TOPIC_FEEDS = [
-    gnews("novità auto listino prova su strada"),        # modelli & prove
-    gnews("mercato auto industria costruttori"),          # business & industria
-    gnews("auto elettriche ibride motori"),               # powertrain (EV/ibrido/endotermico)
-    gnews("guida autonoma tecnologia connessa auto"),     # tecnologia
-    gnews("Formula 1 MotoGP motorsport"),                 # motorsport
-    gnews("Stellantis Volkswagen Toyota Tesla BYD"),      # grandi costruttori / internazionale
-    gnews("noleggio lungo termine leasing flotte"),       # nicchia (una sola query)
+# Helper: feed RSS di Google News ristretto a una singola testata (site:dominio).
+def gsite(domain, lang="it", country="IT"):
+    return gn(f"site:{domain}", lang, country)
+
+# ===== FONTI ITALIANE (prima le italiane) =================================
+IT_FEEDS = [
+    # Feed RSS nativi, gia' verificati (restano nativi perche' funzionanti).
+    "https://it.motor1.com/rss/news/all/",      # Motor1 Italia
+    "https://www.autoblog.it/feed",             # Autoblog Italia
+    "https://formulapassion.it/automoto/feed",  # FormulaPassion (auto + motorsport)
+    # Altre testate italiane via Google News ristretto alla singola testata:
+    gsite("quattroruote.it"),                   # generalista di riferimento
+    gsite("alvolante.it"),                       # prove, listino nuovo/usato
+    gsite("auto.it"),                            # news, prove, sezione green
+    gsite("corriere.it/motori"),                # Corriere Motori
+    gsite("ansa.it/canale_motori"),             # ANSA Motori (agenzia)
+    gn("site:ilsole24ore.com auto"),            # Il Sole 24 Ore (taglio economico)
+    gsite("fleetmagazine.com"),                 # noleggio & flotte (la tua nicchia)
+    gn("site:missionline.it flotte"),           # MissionFleet (auto aziendali)
+    gsite("autoaziendalimagazine.it"),          # Auto Aziendali Magazine
+    gsite("autosprint.it"),                     # motorsport
+    gsite("ruoteclassiche.it"),                 # auto d'epoca
 ]
 
-FEEDS = DIRECT_FEEDS + TOPIC_FEEDS
+# ===== FONTI EUROPEE (poi le europee) ====================================
+EU_FEEDS = [
+    # Industria & business
+    gsite("europe.autonews.com", "en", "US"),   # Automotive News Europe
+    gsite("atz-magazine.com", "en", "US"),      # ATZ (tecnologia / R&D)
+    gsite("automotivelogistics.media", "en", "US"),
+    # Flotte & mobility (la tua nicchia su scala europea)
+    gsite("fleeteurope.com", "en", "US"),       # Fleet Europe
+    gsite("fleetnews.co.uk", "en", "GB"),       # Fleet News (UK)
+    gsite("globalfleet.com", "en", "US"),       # Global Fleet
+    # Generaliste per Paese
+    gsite("auto-motor-und-sport.de", "de", "DE"),
+    gsite("autobild.de", "de", "DE"),
+    gsite("autozeitung.de", "de", "DE"),
+    gn("site:adac.de auto", "de", "DE"),        # ADAC Motorwelt
+    gsite("autocar.co.uk", "en", "GB"),         # Autocar (dal 1895)
+    gsite("autoexpress.co.uk", "en", "GB"),     # Auto Express
+    gsite("evo.co.uk", "en", "GB"),             # EVO (alte prestazioni)
+    # Elettrico
+    gsite("electrek.co", "en", "US"),
+    gsite("insideevs.com", "en", "US"),
+    gsite("electrive.com", "en", "US"),
+]
+
+FEEDS = IT_FEEDS + EU_FEEDS   # ordine: prima le italiane, poi le europee
 
 HOURS_LOOKBACK = 24
-MAX_ARTICLES = 80
+MAX_ARTICLES = 100
 MODEL = "claude-haiku-4-5-20251001"     # verifica il nome su docs.claude.com
 
 SECTIONS_ORDER = [
@@ -270,12 +301,15 @@ def update_google_doc(text):
 # --- 5b. INVIO EMAIL ------------------------------------------------------
 def send_email(html_body):
     oggi = datetime.now(ROME).strftime("%d/%m/%Y")
+    user = GMAIL_USER.strip()
+    # rimuove ogni spazio dalla app password (anche i non-breaking \xa0 da copiaincolla)
+    password = re.sub(r"\s+", "", GMAIL_APP_PASSWORD)
     msg = MIMEText(html_body, "html", "utf-8")
     msg["Subject"] = f"Rassegna Automotive - {oggi}"
-    msg["From"] = GMAIL_USER
-    msg["To"] = RECIPIENT
+    msg["From"] = user
+    msg["To"] = RECIPIENT.strip()
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
-        s.login(GMAIL_USER, GMAIL_APP_PASSWORD)
+        s.login(user, password)
         s.send_message(msg)
 
 
