@@ -1,0 +1,25 @@
+name: Rassegna Automotive
+on:
+  schedule:
+    - cron: "0 5 * * *"   # 05:00 UTC = 07:00 con ora legale (estate)
+    - cron: "0 6 * * *"   # 06:00 UTC = 07:00 con ora solare (inverno)
+  workflow_dispatch:        # avvio manuale per i test
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install feedparser anthropic google-api-python-client google-auth
+      - run: python rassegna_automotive_v0.4.py
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          RECIPIENT: ${{ secrets.RECIPIENT }}
+          GDOC_ID: ${{ secrets.GDOC_ID }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          # Avvio manuale -> invio forzato subito; avvii programmati -> guardia delle 07:00
+          FORCE_SEND: ${{ github.event_name == 'workflow_dispatch' && '1' || '' }}
