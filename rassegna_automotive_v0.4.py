@@ -106,11 +106,10 @@ GDOC_ID = os.environ.get("GDOC_ID")
 GOOGLE_SA_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
 
 
-# --- 0. GUARDIA ORARIO (07:00 Italia, robusta all'ora legale) -------------
-def is_send_time():
-    if os.environ.get("FORCE_SEND") == "1":
-        return True
-    return datetime.now(ROME).hour == 7
+# NOTA: nessuna guardia oraria. Il workflow ha UN solo cron giornaliero, quindi
+# lo script invia una volta sola a ogni esecuzione, anche se GitHub la avvia in
+# ritardo. (In precedenza il controllo "solo alle 07:00" scartava le esecuzioni
+# partite in ritardo, lasciandoti senza mail.)
 
 
 # --- 1. RACCOLTA (una lista per feed, per poterle poi alternare) ----------
@@ -315,9 +314,6 @@ def send_email(html_body):
 
 # --- MAIN -----------------------------------------------------------------
 def main():
-    if not is_send_time():
-        print("Non sono le 07:00 a Roma: esecuzione saltata.")
-        return
     articles = merge(fetch_by_feed())
     if not articles:
         print("Nessuna notizia rilevante nelle ultime 24h.")
