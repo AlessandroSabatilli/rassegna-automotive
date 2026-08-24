@@ -1,15 +1,17 @@
 """
-Rassegna Automotive Giornaliera - v0.4 (fonti IT+EU verificate; invio email robusto)
+Rassegna Automotive Giornaliera - v0.5 (fonti IT+EU; rassegna + script video)
 Pipeline: RSS ingest -> dedup/interleave equo -> sintesi AI fedele (Claude)
-          -> aggiorna un Google Doc (per il Progetto Claude) + invia email HTML
+          -> aggiorna il Google Doc rassegna + invia email HTML
+          -> genera gli script video del giorno e li archivia (con data) in un 2o Doc
 Copertura a 360 gradi su tutto il settore automotive.
-Invio ogni mattina alle 07:00 ora italiana (gestione automatica dell'ora legale).
+Un'unica esecuzione giornaliera (cron nel workflow); invia a ogni esecuzione.
 
 Setup una tantum:
     pip install feedparser anthropic google-api-python-client google-auth
     Variabili d'ambiente:
       ANTHROPIC_API_KEY, GMAIL_USER, GMAIL_APP_PASSWORD, RECIPIENT (opz.)
-      GDOC_ID, GOOGLE_SERVICE_ACCOUNT_JSON  (opz.: se assenti, salta il Google Doc)
+      GDOC_ID, GOOGLE_SERVICE_ACCOUNT_JSON   (opz.: se assenti, salta il Doc rassegna)
+      GDOC_SCRIPTS_ID   (opz.: se assente, salta la generazione degli script video)
 """
 import os
 import sys
@@ -104,6 +106,18 @@ RECIPIENT = os.environ.get("RECIPIENT", GMAIL_USER)
 
 GDOC_ID = os.environ.get("GDOC_ID")
 GOOGLE_SA_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
+
+# --- Generazione script video (attiva solo se GDOC_SCRIPTS_ID e' impostato) --
+GDOC_SCRIPTS_ID = os.environ.get("GDOC_SCRIPTS_ID")   # Doc-archivio degli script
+SCRIPT_MODEL = "claude-sonnet-5"    # modello capace per la scrittura (verifica su docs.claude.com)
+MAX_SCRIPTS = 5                     # quanti script generare al giorno
+
+BRAND_CONTEXT = """Sei il content strategist di un personal brand automotive.
+Posizionamento: "l'auto come decisione economica".
+Pubblico: prosumer - appassionati, freelance, partite IVA, piccoli imprenditori.
+Tono: competente ma accessibile, concreto, diretto, senza gergo inutile e senza hype.
+Pilastri: 1) analisi costi; 2) prove pratiche dei modelli (per chi deve decidere);
+3) myth-busting su noleggio a lungo termine, leasing e fisco; 4) dietro le quinte/personale."""
 
 
 # NOTA: nessuna guardia oraria. Il workflow ha UN solo cron giornaliero, quindi
@@ -312,6 +326,73 @@ def send_email(html_body):
         s.send_message(msg)
 
 
+# --- 6. SCRIPT VIDEO (generazione + archiviazione datata) -----------------
+def generate_scripts(data, catalog):
+    """Genera script pronti da registrare dalle notizie curate della rassegna."""
+    news = []
+    for title, rows in _ordered_sections(data, catalog):
+        for it in rows:
+            art = catalog[it["id"]]
+            news.append(f"[{title}] {it.get('summary','').strip()} "
+                        f"(Fonte: {art['source']} - {art['link']})")
+    if not news:
+        return None
+    listing = "\n".join(news)
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    prompt = f"""{BRAND_CONTEXT}
+
+Dalle notizie della rassegna di oggi (sotto), scegli le {MAX_SCRIPTS} con maggiore
+potenziale di contenuto e, per ciascuna, scrivi uno script di video verticale
+PRONTO DA REGISTRARE (stesso 9:16 per Instagram Reels, TikTok e YouTube Shorts).
+
+Per ogni script includi:
+- Notizia e pilastro (con link alla fonte)
+- Hook (0-3 sec)
+- Script parlato (20-45 sec, italiano parlato reale, battute brevi, un'idea alla volta)
+- Chiusura + CTA da personal brand
+- Testo a schermo (3-6 keyword)
+- Idee visive / B-roll
+- Caption + 5-8 hashtag
+- Note per piattaforma (Reels / TikTok / Shorts)
+
+Regole:
+- Attieniti ai fatti della notizia: non inventare cifre o dichiarazioni non presenti.
+- Dove servirebbe un dato fiscale/NLT preciso o una presa di posizione personale,
+  scrivi [DA VERIFICARE] o [MIA OPINIONE] invece di inventare.
+- Voce competente ma accessibile, niente hype. Output in italiano, in testo semplice.
+
+NOTIZIE:
+{listing}
+"""
+    msg = client.messages.create(
+        model=SCRIPT_MODEL,
+        max_tokens=4000,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return "".join(b.text for b in msg.content if b.type == "text").strip()
+
+
+def archive_scripts(text):
+    """Inserisce il blocco di oggi IN CIMA al Doc-archivio, con la data,
+    mantenendo sotto tutti i giorni precedenti (storico consultabile)."""
+    from google.oauth2 import service_account
+    from googleapiclient.discovery import build
+
+    oggi = datetime.now(ROME).strftime("%d/%m/%Y")
+    sep = "=" * 40
+    block = f"{sep}\nSCRIPT VIDEO - {oggi}\n{sep}\n\n{text}\n\n\n"
+    creds = service_account.Credentials.from_service_account_info(
+        json.loads(GOOGLE_SA_JSON),
+        scopes=["https://www.googleapis.com/auth/documents"],
+    )
+    service = build("docs", "v1", credentials=creds, cache_discovery=False)
+    # insertText all'indice 1 = in cima: lo storico esistente scorre sotto.
+    service.documents().batchUpdate(
+        documentId=GDOC_SCRIPTS_ID,
+        body={"requests": [{"insertText": {"location": {"index": 1}, "text": block}}]},
+    ).execute()
+
+
 # --- MAIN -----------------------------------------------------------------
 def main():
     articles = merge(fetch_by_feed())
@@ -335,6 +416,16 @@ def main():
         print("Email inviata.")
     except Exception as exc:
         errors.append(f"Email: {exc}")
+
+    # Script video: solo se configurato (GDOC_SCRIPTS_ID). Non blocca la rassegna.
+    if GDOC_SCRIPTS_ID and GOOGLE_SA_JSON:
+        try:
+            scripts = generate_scripts(data, catalog)
+            if scripts:
+                archive_scripts(scripts)
+                print("Script video archiviati nel Doc.")
+        except Exception as exc:
+            errors.append(f"Script video: {exc}")
 
     if errors:
         for e in errors:
