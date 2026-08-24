@@ -20,3 +20,4 @@ jobs:
           RECIPIENT: ${{ secrets.RECIPIENT }}
           GDOC_ID: ${{ secrets.GDOC_ID }}
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GDOC_SCRIPTS_ID: ${{ secrets.GDOC_SCRIPTS_ID }}
